@@ -13,7 +13,6 @@ const lfm = new LastfmAPI({
 
 const URL_REGEX = /^.+last.fm\/music\/([^/]+)\/[^/]+\/([^/]+)$/;
 const LEVENSHTEIN_THRESHOLD = 0.8;
-
 export type TrackInfo = {
   name: string;
   duration: string;
@@ -39,11 +38,14 @@ type TopTracksResult = {
   };
 };
 
+
+// need track.name, track.url, track.artist.name
 export async function getTopTracks(
   user: string,
   useCached: boolean
 ): Promise<Array<TrackInfo>> {
   const CACHE_FILE = path.resolve(__dirname, "../cache.json");
+  console.log("CACHE_FILE:",CACHE_FILE);
   if (useCached) {
     try {
       return JSON.parse(fs.readFileSync(CACHE_FILE).toString());
@@ -55,19 +57,37 @@ export async function getTopTracks(
   console.log("Fetching play counts from last.fm..");
   let tracks: TrackInfo[] = [];
   for (let page = 1; ; page++) {
+	  console.log("PAGE:",page);
     const result: TopTracksResult = await promisify(lfm.user, "getTopTracks", {
       user,
       limit: 1000, // API per-page limit
       page: page,
     });
+
+	    
+    console.log("concatting");
     tracks = tracks.concat(result.track);
+    /*
+    const minResult = result.track.map(item => { 
+	    const { name, duration, playcount, mbid, url, artist } = item;
+	    return { name, duration, playcount, mbid, url, artist }
+    });
+    tracks = tracks.concat(minResult);
+    */
+    console.log(tracks);
+    console.log("getting total");
     const { total } = result["@attr"];
+
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(tracks));
+    console.log("total",total);
     if (tracks.length >= parseInt(total, 10)) {
+	    console.log("breaking:",total);
       break;
     }
     console.log("Fetching play counts.. (%d/%d)", tracks.length, total);
   }
   // cache results for development purposes
+  console.log("Caching to ",CACHE_FILE);
   fs.writeFileSync(CACHE_FILE, JSON.stringify(tracks));
   return tracks;
 }
@@ -107,7 +127,7 @@ function findMatchingTracks(
 
     if (match(track.name, name)) {
       nameMatches.push(track);
-      if (match(track.artist.name, artist)) {
+      if (match(track.artist.name.replace(/^The /,''), artist.replace(/^The /,''))) {
         matches.push(track);
       }
     }

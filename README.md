@@ -57,3 +57,8 @@ Run:
 ```
 yarn start
 ```
+
+Note:
+
+If there is a cryptic error about buffer space, it is likely because a large iTunes library could not be loaded.
+Use a local version of node-osa with the buffer size increased in child process to get it to work

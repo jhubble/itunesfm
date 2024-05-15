@@ -2,10 +2,14 @@
 import type { TrackInfo } from "./lastfm";
 
 import fs from "fs";
+const fsPromises = fs.promises;
 import os from "os";
 import path from "path";
 import prompt from "prompt";
 import { getTopTracks, matchTrack } from "./lastfm";
+
+const TRACK_CACHE = path.resolve(__dirname, "../iTunescache.json");
+console.log("TRACK_CACHE",TRACK_CACHE);
 
 prompt.colors = false;
 
@@ -42,7 +46,8 @@ async function promptForMatch(
       matches[i].playcount
     );
   }
-  const reply = await quickPrompt("Enter some numbers (0 for none, a for all)");
+  const reply = name !== "reallyask" ? "0" : await quickPrompt("Enter some numbers (0 for none, a for all)");
+  console.log("defaulting to no match");
   if (reply === "a" || reply === "A") {
     return matches;
   }
@@ -60,23 +65,62 @@ async function main() {
   try {
     let provider;
     if (os.platform() === "win32") {
+	    console.log("using windows provider");
       provider = require("./providers/WindowsProvider.js");
     } else if (os.platform() === "darwin") {
+	    console.log("using mac provider");
       provider = require("./providers/OSXProvider");
     } else {
       throw new Error(`platform ${os.platform()} not supported`);
     }
+    const useCached = process.argv.indexOf("cache") !== -1;
+
+    let tracksPromise;
     // Start fetching from iTunes immediately.
-    const tracksPromise = provider.getTracks();
+    if (useCached && fs.existsSync(TRACK_CACHE)) {
+	    console.log("get tracks cache");
+	    tracksPromise = fsPromises.readFile(TRACK_CACHE,'utf-8').then(result => {
+		    console.log("reading track cache");
+		    return JSON.parse(result.toString());
+	    });
+    }
+    else {
+	    console.log("get tracks promise");
+	    tracksPromise = provider.getTracks().then(result => {
+		    console.log("got tracks");
+		    fs.writeFileSync(TRACK_CACHE, JSON.stringify(result));
+		    return result;
+	    });
+
+    }
 
     let username = process.argv[2];
+    console.log("username",username);
     if (username == null) {
       username = await quickPrompt("Enter your last.fm username");
     }
-    const useCached = process.argv.indexOf("cache") !== -1;
 
+    let artistMatch = 0;
+    let artistNotMatch = 0;
+    let trackMatch = 0;
+    let trackNotMatch = 0;
+    console.log("starting -- getting top tracks");
     const topTracks = await getTopTracks(username, useCached);
+    console.log("got top tracks , getting tracks");
     const myTracks = await tracksPromise;
+    console.log("got myTracks");
+
+    const artistHash = {};
+
+    topTracks.forEach(track => {
+	    const artist = track.artist.name.replace(/^The /,'').toLowerCase();
+	    if (!artistHash[artist]) {
+		    artistHash[artist] = [];
+	    }
+	    artistHash[artist].push(track);
+    });
+	    
+
 
     console.log(
       "Found %d tracks locally, %d on last.fm.",
@@ -92,9 +136,19 @@ async function main() {
     const updates = {};
     for (const id in myTracks) {
       const { name, artist, playedCount } = myTracks[id];
+      const artistSimple = artist.replace(/^The /,'').toLowerCase();
       const urls = matching[id];
-      let matches = await matchTrack(topTracks, name, artist, urls);
+      let matches = [];
+      if (artistHash[artistSimple]) {
+	      artistMatch++;
+	      matches = await matchTrack(artistHash[artistSimple], name, artist, urls);
+      }
+      else {
+	      console.warn ( ` --> Artist not found: ${artistSimple}`);
+	      artistNotMatch++;
+      }
       if (matches.length === 0) {
+        trackNotMatch++;
         console.warn(
           `warning: could not match ${name} by ${artist} (id = ${id})`
         );
@@ -103,6 +157,7 @@ async function main() {
         }
         continue;
       }
+      trackMatch++;
       if (urls == null && matches.length > 1) {
         matches = await promptForMatch(name, artist, matches);
         matching[id] = matches.map((x) => x.url);
@@ -117,6 +172,12 @@ async function main() {
       }
     }
 
+    console.warn("UPDATES",updates);
+    console.warn(`Artist Match    : ${artistMatch}`);
+    console.warn(`Artist Not Match: ${artistNotMatch}`);
+    console.warn(`Track Match     : ${trackMatch}`);
+    console.warn(`Track Not Match : ${trackNotMatch}`);
+    console.warn(`Updates         : ${Object.keys(updates).length}`);
     if (Object.keys(updates).length === 0) {
       console.log("No play counts were changed.");
     } else {
